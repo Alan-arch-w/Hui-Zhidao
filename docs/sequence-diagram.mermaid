@@ -1,0 +1,237 @@
+%% 汇知道 V2 — 时序图
+
+%% ============================================================
+%% 时序图 1: 完整对话流程（状态机驱动）
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CV as ChatView
+    participant CE as ChatEngine
+    participant AC as AppContext(reducer)
+    participant OCR as OcrSimulator
+    participant ME as MatchEngine
+
+    Note over U,ME: 阶段1: 欢迎节点
+    U->>CV: 打开页面
+    CV->>AC: dispatch( INIT_CHAT )
+    AC->>CE: getPhaseAction('welcome')
+    CE-->>AC: AI消息 + richContent: 无
+    AC-->>CV: messages=[欢迎消息]
+    CV-->>U: 显示AI欢迎气泡 + "开始咨询"按钮
+
+    Note over U,ME: 阶段2: 上传引导
+    U->>CV: 点击"开始咨询"
+    CV->>AC: dispatch( ADVANCE_PHASE, payload:{action:'start'} )
+    AC->>CE: advancePhase('welcome','start')
+    CE-->>AC: nextPhase='upload_guide'
+    AC->>CE: getPhaseAction('upload_guide')
+    CE-->>AC: AI消息 + richContent:{type:'upload'}
+    AC-->>CV: messages追加 + phase=upload_guide
+    CV-->>U: 显示AI引导文字 + 嵌入上传区域
+
+    Note over U,ME: 阶段3: OCR解析
+    U->>CV: 选择文件(或点击"使用示例数据")
+    CV->>AC: dispatch( FILE_SELECTED, payload:{fileName} )
+    AC->>AC: state.fileName = fileName
+    AC->>CE: advancePhase('upload_guide','file_selected')
+    CE-->>AC: nextPhase='ocr_parsing'
+    AC->>CE: getPhaseAction('ocr_parsing')
+    CE-->>AC: AI消息 + richContent:{type:'ocr_progress'}
+    AC-->>CV: messages追加 + phase=ocr_parsing
+    CV-->>U: 显示AI消息 + 嵌入OCR解析动画
+    CV->>OCR: start(progressCallback)
+    OCR-->>CV: progress: 25% (识别学历...)
+    CV-->>U: 更新进度条
+    OCR-->>CV: progress: 50% (提取项目...)
+    OCR-->>CV: progress: 75% (分析经历...)
+    OCR-->>CV: progress: 100% (生成画像...)
+    OCR-->>CV: done( demoProfile )
+
+    Note over U,ME: 阶段4: 画像生成
+    CV->>AC: dispatch( OCR_COMPLETE, payload:{profile} )
+    AC->>AC: state.profile = profile, completeness=70
+    AC->>CE: advancePhase('ocr_parsing','complete')
+    CE-->>AC: nextPhase='profile_generated'
+    AC->>CE: getPhaseAction('profile_generated')
+    CE-->>AC: AI消息 + richContent:{type:'profile_card', data:profile} + {type:'progress_badge', data:70%}
+    AC-->>CV: messages追加 + phase=profile_generated
+    CV-->>U: 显示AI确认文字 + 嵌入画像卡片 + 完整度徽章 + "继续补充"按钮
+
+    Note over U,ME: 阶段5: 智能追问
+    U->>CV: 点击"继续补充信息"
+    CV->>AC: dispatch( ADVANCE_PHASE, payload:{action:'continue'} )
+    AC->>CE: advancePhase('profile_generated','continue')
+    CE-->>AC: nextPhase='quiz'
+    AC->>CE: getPhaseAction('quiz', quizIndex=0)
+    CE-->>AC: AI消息 + richContent:{type:'quiz_options', data:Q1}
+    AC-->>CV: messages追加 + phase=quiz
+    CV-->>U: 显示AI提问 + 嵌入选项按钮
+
+    loop 追问循环 (7个问题)
+        U->>CV: 选择答案
+        CV->>AC: dispatch( QUIZ_ANSWER, payload:{questionId, answer} )
+        AC->>AC: state.quizAnswers[id]=answer, recalc completeness
+        AC->>CV: 追加用户消息(type:'user')
+        AC->>CE: getPhaseAction('quiz', quizIndex++)
+        alt 还有下一题
+            CE-->>AC: AI消息 + richContent:{type:'quiz_options', data:Q_next} + {type:'progress_badge'}
+        else 全部答完
+            CE-->>AC: nextPhase='matching', AI消息"正在匹配政策..."
+        end
+        AC-->>CV: messages追加
+        CV-->>U: 显示新问题 / 匹配中提示
+    end
+
+    Note over U,ME: 阶段6: 政策匹配
+    CV->>AC: dispatch( START_MATCHING )
+    AC->>ME: matchAll(profile, quizAnswers)
+    ME->>ME: 遍历10条政策matchRules
+    ME->>ME: 过滤background类(P006,P009)
+    ME->>ME: 对normal+reference类计算matchScore
+    ME-->>AC: MatchResult[] (按score降序)
+    AC->>AC: state.matchResults = results
+    AC->>CE: advancePhase('matching','done')
+    CE-->>AC: nextPhase='results'
+    AC->>CE: getPhaseAction('results')
+    CE-->>AC: AI消息 + richContent:{type:'match_result', data:top3} + {type:'disclaimer'}
+    AC-->>CV: messages追加 + phase=results
+    CV-->>U: 显示AI总结 + 嵌入Top3匹配卡片 + "查看更多" + 免责声明
+
+    Note over U,ME: 阶段7: 申报建议
+    U->>CV: 点击"查看申报建议"
+    CV->>AC: dispatch( ADVANCE_PHASE, payload:{action:'suggestion'} )
+    AC->>CE: advancePhase('results','suggestion')
+    CE-->>AC: nextPhase='suggestion'
+    AC->>CE: getPhaseAction('suggestion')
+    CE-->>AC: AI消息 + richContent:{type:'suggestion', data:建议内容}
+    AC-->>CV: messages追加 + phase=suggestion/completed
+    CV-->>U: 显示AI申报建议卡片 + "查看完整结果"入口
+
+    Note over U,ME: 用户可随时切换侧栏模块查看详细结果
+
+
+%% ============================================================
+%% 时序图 2: 政策匹配引擎调用流程
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant AC as AppContext
+    participant ME as MatchEngine
+    participant P as policies.ts (数据)
+    participant CC as CompletenessCalc
+
+    AC->>ME: matchAll(profile, quizAnswers)
+    ME->>P: 读取 POLICIES (10条)
+    P-->>ME: Policy[]
+
+    loop 遍历每条政策
+        ME->>ME: 读取 policy.matchRules
+        alt P006 或 P009 (background)
+            ME->>ME: status='background', 跳过匹配
+        else P003 或 P004 (reference)
+            ME->>ME: 执行匹配逻辑, status='reference'
+        else 其他 (normal)
+            ME->>ME: 执行匹配逻辑, status='normal'
+        end
+
+        alt P001 创业补贴
+            ME->>ME: age<=35? +30 | 创业经历? +40 | 社保? +15 | 技能? +15
+        else P002 租房补贴
+            ME->>ME: 学历>=本科? +25 | 租房? +30 | 徐汇工作? +20 | 海外+重点产业? +25
+        else P003 白玉兰浦江
+            ME->>ME: 海外留学? +50 | age<=45? +30 | 来沪意向? +20
+        else P004 重点产业奖励
+            ME->>ME: 8大重点产业? +40 | 薪资>=30万? +30 | 知识产权? +15 | 研发投入? +15
+        else P005 U30科创
+            ME->>ME: age<=30? +35 | 科技/AI方向? +35 | 创业意向? +30
+        else P007 人才活动
+            ME->>ME: 学习意向? +40 | AI/创业方向? +30 | 活动匹配? +30
+        else P008 储备人才
+            ME->>ME: 应届硕博? +35 | 年龄达标? +25 | 院校符合? +25 | 方向匹配? +15
+        else P010 海聚英才OPC
+            ME->>ME: AI/技术方向? +40 | 创业意向? +30 | 参赛意向? +30
+        end
+
+        ME->>ME: 汇总score → scoreToLevel(score)
+        Note right of ME: >=70: high<br/>>=40: medium<br/>>=20: low<br/><20: none
+
+        ME->>ME: 生成 satisfiedConditions[] + pendingConditions[]
+        ME->>ME: 生成 suggestion 文本
+        ME-->>AC: MatchResult{policyId, matchScore, matchLevel, status, ...}
+    end
+
+    AC->>AC: 按matchScore降序排序
+    AC->>AC: 过滤 status='background' (P006,P009移至政策参考分区)
+    AC->>AC: 取Top3用于对话流展示
+    AC->>CC: calculate(profile, quizAnswers)
+    CC-->>AC: completeness=85
+    AC->>AC: state.matchResults = sortedResults
+    AC->>AC: state.completeness = completeness
+
+
+%% ============================================================
+%% 时序图 3: 侧栏模块切换 + 回退流程
+%% ============================================================
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant SB as Sidebar
+    participant ML as MainLayout
+    participant AC as AppContext
+    participant CV as ChatView
+    participant RV as ResultsView
+    participant PV as ProfileView
+    participant PoV as PoliciesView
+    participant PD as PolicyDetail
+
+    Note over U,PD: 初始状态: currentModule='chat', moduleStack=[]
+
+    Note over U,PD: 场景1: 从对话切换到查看结果
+    U->>SB: 点击"查看结果"图标
+    SB->>AC: navigateTo('results')
+    AC->>AC: moduleStack.push('chat'), currentModule='results'
+    AC-->>ML: currentModule='results'
+    ML->>RV: 渲染 ResultsView
+    RV-->>U: 显示政策匹配/资格灯号/材料清单等Tab
+
+    Note over U,PD: 场景2: 从结果切换到政策查阅
+    U->>SB: 点击"政策查阅"图标
+    SB->>AC: navigateTo('policies')
+    AC->>AC: moduleStack.push('results'), currentModule='policies'
+    AC-->>ML: currentModule='policies'
+    ML->>PoV: 渲染 PoliciesView
+    PoV-->>U: 显示10条政策列表 + 筛选搜索
+
+    Note over U,PD: 场景3: 查看政策详情
+    U->>PoV: 点击某条政策卡片
+    PoV->>AC: openPolicyDetail('P005')
+    AC->>AC: policyDetailId='P005'
+    AC-->>ML: policyDetailId='P005'
+    ML->>PD: 渲染 PolicyDetail
+    PD-->>U: 显示政策完整信息 + 返回按钮
+
+    Note over U,PD: 场景4: 从政策详情返回列表
+    U->>PD: 点击"返回列表"
+    PD->>AC: closePolicyDetail()
+    AC->>AC: policyDetailId=null
+    AC-->>ML: policyDetailId=null
+    ML->>PoV: 渲染 PoliciesView(列表)
+    PoV-->>U: 回到政策列表
+
+    Note over U,PD: 场景5: 浏览器后退 / 导航栈回退
+    U->>ML: 浏览器后退 (或点击返回)
+    ML->>AC: navigateBack()
+    AC->>AC: prev = moduleStack.pop()
+    AC->>AC: currentModule = prev
+    AC-->>ML: currentModule='results'
+    ML->>RV: 渲染 ResultsView
+    RV-->>U: 回到查看结果页
+
+    Note over U,PD: 场景6: 回到对话咨询
+    U->>SB: 点击"对话咨询"图标
+    SB->>AC: navigateTo('chat')
+    AC->>AC: moduleStack=[], currentModule='chat'
+    AC-->>ML: currentModule='chat'
+    ML->>CV: 渲染 ChatView
+    CV-->>U: 回到对话流(历史消息保留, 可上下滚动)

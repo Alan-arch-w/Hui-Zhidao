@@ -1,0 +1,212 @@
+%% 汇知道 V2 — 类图（数据结构 + 服务层）
+classDiagram
+  direction LR
+
+  %% ============ 数据模型 ============
+
+  class Policy {
+    +id: string
+    +name: string
+    +category: string
+    +subcategory: string
+    +target: string
+    +conditions: string[]
+    +benefit: string
+    +applyMethod: string
+    +source: string
+    +validPeriod: string
+    +keywords: string[]
+    +matchRules: string
+  }
+
+  class TalentProfile {
+    +name: string
+    +age: number
+    +education: string
+    +major: string
+    +currentRole: string
+    +workArea: string
+    +companyStage: string
+    +industry: string
+    +projectExp: string
+    +highlights: string
+    +talentType: string
+    +overseasExp: string
+    +achievements: string[]
+  }
+
+  class QuizQuestion {
+    +id: string
+    +question: string
+    +options: string[]
+    +multi: boolean
+  }
+
+  class QuizAnswer {
+    +socialInsurance: string
+    +renting: string
+    +workInXuhui: string
+    +achievements: string[]
+    +overseasExp: string
+    +startupIntent: string
+    +policyInterest: string
+  }
+
+  class MatchResult {
+    +policyId: string
+    +policyName: string
+    +matchLevel: MatchLevel
+    +matchScore: number
+    +status: PolicyStatus
+    +satisfiedConditions: string[]
+    +pendingConditions: string[]
+    +suggestion: string
+  }
+
+  class RichContent {
+    +type: RichContentType
+    +data: Record~string, any~
+  }
+
+  class ChatMessage {
+    +id: string
+    +type: MessageType
+    +content: string
+    +richContents: RichContent[]
+    +timestamp: number
+  }
+
+  class AppState {
+    +phase: ChatPhase
+    +messages: ChatMessage[]
+    +profile: TalentProfile
+    +quizAnswers: QuizAnswer
+    +fileName: string
+    +completeness: number
+    +matchResults: MatchResult[]
+    +useDemoData: boolean
+  }
+
+  class NavigationState {
+    +currentModule: ModuleType
+    +moduleStack: ModuleType[]
+    +policyDetailId: string|null
+  }
+
+  %% ============ 枚举 ============
+
+  class ChatPhase {
+    <<enumeration>>
+    welcome
+    upload_guide
+    ocr_parsing
+    profile_generated
+    quiz
+    matching
+    results
+    suggestion
+    completed
+  }
+
+  class MatchLevel {
+    <<enumeration>>
+    high
+    medium
+    low
+    none
+  }
+
+  class PolicyStatus {
+    <<enumeration>>
+    normal
+    reference
+    background
+  }
+
+  class ModuleType {
+    <<enumeration>>
+    chat
+    results
+    profile
+    policies
+  }
+
+  class RichContentType {
+    <<enumeration>>
+    upload
+    ocr_progress
+    profile_card
+    quiz_options
+    match_result
+    progress_badge
+    suggestion
+    disclaimer
+  }
+
+  %% ============ 服务层 ============
+
+  class AppContext {
+    +state: AppState
+    +navigation: NavigationState
+    +dispatch(action): void
+    +navigateTo(module): void
+    +navigateBack(): void
+    +showToast(msg): void
+  }
+
+  class ChatEngine {
+    +getPhaseAction(phase): ChatAction
+    +advancePhase(currentPhase, payload): ChatPhase
+    +buildMessages(phase, profile, quiz): ChatMessage[]
+  }
+
+  class MatchEngine {
+    +matchAll(profile, quiz): MatchResult[]
+    +matchPolicy(policyId, profile, quiz): MatchResult
+    -scoreToLevel(score): MatchLevel
+  }
+
+  class OcrSimulator {
+    +start(callback): void
+    +getDemoProfile(): TalentProfile
+    +getParseSteps(): string[]
+  }
+
+  class CompletenessCalculator {
+    +calculate(profile, quiz): number
+    +getBreakdown(profile, quiz): CompletenessItem[]
+  }
+
+  %% ============ 关系 ============
+
+  AppState o-- ChatMessage : messages
+  AppState o-- TalentProfile : profile
+  AppState o-- QuizAnswer : quizAnswers
+  AppState o-- MatchResult : matchResults
+  AppState --> ChatPhase : phase
+
+  ChatMessage o-- RichContent : richContents
+
+  NavigationState --> ModuleType : currentModule
+
+  MatchResult --> MatchLevel : matchLevel
+  MatchResult --> PolicyStatus : status
+  MatchResult --> Policy : policyId
+
+  QuizQuestion ..> QuizAnswer : field id 对应
+
+  AppContext --> AppState : state
+  AppContext --> NavigationState : navigation
+
+  ChatEngine ..> AppState : 读写 phase/messages
+  ChatEngine ..> ChatPhase : 状态转换
+
+  MatchEngine ..> TalentProfile : 输入
+  MatchEngine ..> QuizAnswer : 输入
+  MatchEngine ..> Policy : 规则来源
+  MatchEngine ..> MatchResult : 输出
+
+  OcrSimulator ..> TalentProfile : 输出
+
+  CompletenessCalculator ..> TalentProfile : 输入
+  CompletenessCalculator ..> QuizAnswer : 输入
